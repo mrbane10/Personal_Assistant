@@ -1,7 +1,7 @@
 streamlit
 python-dotenv
 groq
-PyMuPDF==1.25.5   # exposes “import fitz” for PDFs
+PyMuPDF
 easyocr
 pillow
 numpy

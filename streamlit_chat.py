@@ -23,7 +23,7 @@ from pathlib import Path
 import streamlit as st                              # 1️⃣ Page config first!
 st.set_page_config(page_title="Groq Chat", page_icon="💬", layout="centered")
 
-import fitz                                          # PyMuPDF
+import pymupdf                                          # PyMuPDF
 import numpy as np
 import easyocr
 from PIL import Image
@@ -115,7 +115,7 @@ def pdf_to_text(uploaded) -> str:
     try:
         buf = uploaded.read()
         uploaded.seek(0)
-        doc = fitz.open(stream=buf, filetype="pdf")
+        doc = pymupdf.open(stream=buf, filetype="pdf")
         return "".join(page.get_text() for page in doc)
     except Exception as e:
         st.error(f"PDF error: {e}")
