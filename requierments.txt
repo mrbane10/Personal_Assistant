@@ -1,0 +1,8 @@
+streamlit
+python-dotenv
+groq
+PyMuPDF
+easyocr
+pillow
+numpy
+python-docx        # optional, but harmless if present
