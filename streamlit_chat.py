@@ -11,6 +11,12 @@ Cloud-friendly tweaks:
 2. Uses st.cache_resource for the heavy EasyOCR model (fast cold-start on Cloud).
 3. Looks for the GROQ key in either env-vars *or* st.secrets (Streamlit Cloud’s UI).
 4. No Streamlit calls during import-time try/except (safer on Cloud).
+
+Recent update:
+──────────────
+* Replaced the PyMuPDF (fitz) PDF parser with **PyPDF2** for broader
+  compatibility in cloud environments where PyMuPDF wheels can be heavy
+  or unavailable.
 """
 
 # ───────────────────────── Imports ───────────────────────── #
@@ -19,11 +25,12 @@ from __future__ import annotations
 import json, os, uuid, time
 from datetime import datetime
 from pathlib import Path
+from io import BytesIO
 
 import streamlit as st                              # 1️⃣ Page config first!
 st.set_page_config(page_title="Groq Chat", page_icon="💬", layout="centered")
 
-import pymupdf                                          # PyMuPDF
+from PyPDF2 import PdfReader                        # ← switched from fitz to PyPDF2
 import numpy as np
 import easyocr
 from PIL import Image
@@ -68,6 +75,7 @@ def get_easy_reader():
 easy_reader = get_easy_reader()
 
 # ────────────────── Session helpers ────────────────── #
+
 def load_sessions() -> dict[str, dict]:
     sessions: dict[str, dict] = {}
     for fn in SESSIONS_DIR.glob("*.json"):
@@ -111,12 +119,17 @@ def delete_session(sid: str) -> None:
         pass
 
 # ─────────────────────── File helpers ───────────────────── #
+
 def pdf_to_text(uploaded) -> str:
+    """Extract text from a PDF using PyPDF2 instead of PyMuPDF (fitz)."""
     try:
-        buf = uploaded.read()
-        uploaded.seek(0)
-        doc = pymupdf.open(stream=buf, filetype="pdf")
-        return "".join(page.get_text() for page in doc)
+        # Read the uploaded file into a BytesIO buffer so PyPDF2 can handle it
+        buf = BytesIO(uploaded.read())
+        uploaded.seek(0)  # reset pointer so user can re‑read later if needed
+
+        reader = PdfReader(buf)
+        text = "".join(page.extract_text() or "" for page in reader.pages)
+        return text
     except Exception as e:
         st.error(f"PDF error: {e}")
         return ""
@@ -171,9 +184,7 @@ def chat_completion_stream(history: list[dict], ctx: dict, model_name: str):
 
     # build context string
     context_parts = [
-        f"context from {typ}:\n{item['text']}"
-        for typ, item in ctx.items()
-        if item["text"]
+        f"context from {typ}:\n{item['text']}" for typ, item in ctx.items() if item["text"]
     ]
 
     prompt = system_prompt
@@ -198,7 +209,7 @@ def chat_completion_stream(history: list[dict], ctx: dict, model_name: str):
 
 # ═══════════════════════ UI ═══════════════════════ #
 # One-time session-state initialisation
-if "sessions"           not in st.session_state: st.session_state.sessions          = load_sessions()
+if "sessions"           not in st.session_state: st.session_state.sessions           = load_sessions()
 if "current_session_id" not in st.session_state: st.session_state.current_session_id = None
 
 # ─────────────── Sidebar ─────────────── #
@@ -231,7 +242,7 @@ with st.sidebar:
     if upl and st.session_state.current_session_id:
         sess = st.session_state.sessions[st.session_state.current_session_id]
 
-        if upl.type.endswith("pdf"):
+        if upl.type.endswith("pdf") or upl.type == "application/pdf":
             txt, src = pdf_to_text(upl), f"PDF: {upl.name}"
             key = "pdf"
         elif upl.type.startswith("image/"):
