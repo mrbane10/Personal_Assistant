@@ -1,7 +1,6 @@
 streamlit
 python-dotenv
-groq
-pymupdf==1.24.4
+groqPyMuPDF==1.25.5
 easyocr
 pillow
 numpy
