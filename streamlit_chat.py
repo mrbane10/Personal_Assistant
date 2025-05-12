@@ -1,4 +1,11 @@
 # groq_streamlit_cloud.py
+"""
+Streamlit chat application that:
+• stores multi-chat "sessions" using Streamlit's native session state
+• accepts PDFs / images / text files / docx and makes their text available as context
+• streams answers from Groq's chat-completion API
+• optimized for Streamlit Cloud deployment
+"""
 
 import base64
 import io
@@ -6,9 +13,10 @@ import json
 import os
 import time
 import uuid
+import hashlib
 from datetime import datetime
 
-import pymupdf                               # PyMuPDF
+import pymupdf                             # PyMuPDF
 import numpy as np
 import streamlit as st
 from PIL import Image
@@ -30,6 +38,8 @@ except ImportError:
 # ────────────────────────  CONFIG  ──────────────────────── #
 # Streamlit secrets management for API keys
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY", ""))
+# Password for app access
+APP_PASSWORD = st.secrets.get("APP_PASSWORD", os.getenv("APP_PASSWORD", ""))
 
 AVAILABLE_MODELS = [
     "llama-3.3-70b-versatile",
@@ -40,7 +50,10 @@ AVAILABLE_MODELS = [
     "qwen-qwq-32b",
     "meta-llama/llama-4-maverick-17b-128e-instruct"
 ]
-DEFAULT_MODEL = "llama3-70b-8192"
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_MAX_TOKENS = 8192
+MIN_TOKENS = 256
+MAX_TOKENS = 36000
 
 # ────────────────────────  OCR READER  ─────────────────────── #
 @st.cache_resource
@@ -179,7 +192,7 @@ def get_groq_client():
     return Groq(api_key=GROQ_API_KEY)
 
 
-def chat_completion_stream(history: list[dict], context_dict: dict, model_name: str):
+def chat_completion_stream(history: list[dict], context_dict: dict, model_name: str, max_tokens: int):
     """Stream a completion from Groq and return the full text."""
     client = get_groq_client()
     if not client:
@@ -228,7 +241,7 @@ def chat_completion_stream(history: list[dict], context_dict: dict, model_name: 
             model       = model_name,
             messages    = msgs,
             temperature = 0.7,
-            max_tokens  = 4096,  # Reduced from 8192 for better performance
+            max_tokens  = max_tokens,
             stream      = True,
         )
 
@@ -242,7 +255,7 @@ def chat_completion_stream(history: list[dict], context_dict: dict, model_name: 
 
 
 # ──────────────────────────  UI  ─────────────────────────── #
-st.set_page_config(page_title="Groq Chat", page_icon="💬", layout="centered")
+st.set_page_config(page_title="AI Assistant", page_icon="💬", layout="centered")
 
 # Initialize session state
 if "all_sessions"        not in st.session_state: st.session_state.all_sessions        = {}
@@ -305,6 +318,21 @@ with st.sidebar:
             sess["model"] = selected_model
             save_session(sess)
             st.success(f"Model changed to {selected_model}")
+            
+        # Max tokens slider
+        st.slider(
+            "Max response tokens",
+            min_value=MIN_TOKENS,
+            max_value=MAX_TOKENS,
+            value=st.session_state.max_tokens,
+            step=256,
+            key="max_tokens_slider",
+            help="Control the maximum length of the model's response"
+        )
+        
+        # Update session state when slider changes
+        if "max_tokens_slider" in st.session_state:
+            st.session_state.max_tokens = st.session_state.max_tokens_slider
 
     # File uploader (needs an active session)
     file_types = ["pdf", "png", "jpg", "jpeg", "txt"]
@@ -426,7 +454,7 @@ if prompt:
         container = st.empty()
         answer = ""
         try:
-            for partial in chat_completion_stream(sess["messages"], sess["context"], sess.get("model", DEFAULT_MODEL)):
+            for partial in chat_completion_stream(sess["messages"], sess["context"], sess.get("model", DEFAULT_MODEL), st.session_state.max_tokens):
                 answer = partial
                 container.markdown(answer + "▌")
             container.markdown(answer)       # final
