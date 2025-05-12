@@ -39,7 +39,7 @@ except ImportError:
 # Streamlit secrets management for API keys
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY", ""))
 # Password for app access
-APP_PASSWORD = st.secrets.get("APP_PASSWORD", os.getenv("APP_PASSWORD", ""))
+APP_PASSWORD = st.secrets.get("APP_PASSWORD", os.getenv("APP_PASSWORD", "password123"))
 
 AVAILABLE_MODELS = [
     "llama-3.3-70b-versatile",
