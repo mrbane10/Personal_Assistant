@@ -51,9 +51,9 @@ AVAILABLE_MODELS = [
     "meta-llama/llama-4-maverick-17b-128e-instruct"
 ]
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
-DEFAULT_MAX_TOKENS = 4096
+DEFAULT_MAX_TOKENS = 8192
 MIN_TOKENS = 256
-MAX_TOKENS = 8192
+MAX_TOKENS = 36000
 
 # ────────────────────────  OCR READER  ─────────────────────── #
 @st.cache_resource
@@ -260,6 +260,7 @@ st.set_page_config(page_title="AI Assistant", page_icon="💬", layout="centered
 # Initialize session state
 if "all_sessions"        not in st.session_state: st.session_state.all_sessions        = {}
 if "current_session_id"  not in st.session_state: st.session_state.current_session_id  = None
+if "max_tokens"          not in st.session_state: st.session_state.max_tokens          = DEFAULT_MAX_TOKENS
 
 # ───────────────── sidebar ───────────────── #
 with st.sidebar:
@@ -305,6 +306,7 @@ with st.sidebar:
     if st.session_state.current_session_id:
         sess = st.session_state.all_sessions[st.session_state.current_session_id]
         current_model = sess.get("model", DEFAULT_MODEL)
+        
         
         selected_model = st.selectbox(
             "Select model",
