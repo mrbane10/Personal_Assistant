@@ -1,322 +1,419 @@
-# groq_streamlit_chat.py
-"""
-Streamlit chat application that
-• stores multi-chat "sessions" on disk               (sessions/ folder)
-• accepts PDFs / images / text / DOCX as context
-• streams answers from Groq’s chat-completion API
+# groq_streamlit_cloud.py
 
-Cloud-friendly tweaks:
-──────────────────────
-1. Page config is set *first*, before any Streamlit calls.
-2. Uses st.cache_resource for the heavy EasyOCR model (fast cold-start on Cloud).
-3. Looks for the GROQ key in either env-vars *or* st.secrets (Streamlit Cloud’s UI).
-4. No Streamlit calls during import-time try/except (safer on Cloud).
-
-Recent update:
-──────────────
-* Replaced the PyMuPDF (fitz) PDF parser with **PyPDF2** for broader
-  compatibility in cloud environments where PyMuPDF wheels can be heavy
-  or unavailable.
-"""
-
-# ───────────────────────── Imports ───────────────────────── #
-from __future__ import annotations
-
-import json, os, uuid, time
+import base64
+import io
+import json
+import os
+import time
+import uuid
 from datetime import datetime
-from pathlib import Path
-from io import BytesIO
 
-import streamlit as st                              # 1️⃣ Page config first!
-st.set_page_config(page_title="Groq Chat", page_icon="💬", layout="centered")
-
-from PyPDF2 import PdfReader                        # ← switched from fitz to PyPDF2
+import fitz                                # PyMuPDF
 import numpy as np
-import easyocr
+import streamlit as st
 from PIL import Image
-from dotenv import load_dotenv
-from groq import Groq
+from groq import Groq                      # pip install groq
 
-# Optional DOCX support
+# Try to import optional dependencies with graceful fallbacks
 try:
-    import docx                                      # python-docx
+    import easyocr                             # OCR
+    EASYOCR_AVAILABLE = True
+except ImportError:
+    EASYOCR_AVAILABLE = False
+    
+try:
+    import docx                               # python-docx for DOCX files
     DOCX_AVAILABLE = True
 except ImportError:
     DOCX_AVAILABLE = False
 
-# ─────────────────────── Configuration ───────────────────── #
-load_dotenv()
-
-# Streamlit Cloud: pick up the key from either env-var or secrets
-GROQ_API_KEY = (
-    os.getenv("GROQ_API_KEY")                       # local .env
-    or st.secrets.get("GROQ_API_KEY", "")           # cloud secret
-)
+# ────────────────────────  CONFIG  ──────────────────────── #
+# Streamlit secrets management for API keys
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY", ""))
 
 AVAILABLE_MODELS = [
-    "llama3-70b-8192",
     "llama-3.3-70b-versatile",
+    "llama3-70b-8192",
     "deepseek-r1-distill-llama-70b",
     "gemma2-9b-it",
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "qwen-qwq-32b",
-    "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "meta-llama/llama-4-maverick-17b-128e-instruct"
 ]
 DEFAULT_MODEL = "llama3-70b-8192"
-SESSIONS_DIR  = Path("sessions")
-SESSIONS_DIR.mkdir(exist_ok=True)
 
-# ──────────────────────  OCR Reader  ─────────────────────── #
-@st.cache_resource(show_spinner="🔍 Loading OCR…")
-def get_easy_reader():
-    # add/remove languages here if needed
-    return easyocr.Reader(["en"])
+# ────────────────────────  OCR READER  ─────────────────────── #
+@st.cache_resource
+def load_ocr_reader():
+    """Load EasyOCR reader with caching to improve performance"""
+    if EASYOCR_AVAILABLE:
+        return easyocr.Reader(['en'])
+    return None
 
-easy_reader = get_easy_reader()
 
-# ────────────────── Session helpers ────────────────── #
-
+# ──────────────────  SESSION MANAGEMENT  ──────────────── #
 def load_sessions() -> dict[str, dict]:
-    sessions: dict[str, dict] = {}
-    for fn in SESSIONS_DIR.glob("*.json"):
-        try:
-            sessions[fn.stem] = json.loads(fn.read_text())
-        except Exception as e:
-            st.error(f"Could not load session {fn}: {e}")
-    return sessions
+    """Load sessions from session state or initialize empty sessions dictionary"""
+    if "all_sessions" not in st.session_state:
+        st.session_state.all_sessions = {}
+    return st.session_state.all_sessions
 
 
-def save_session(sess: dict) -> None:
-    (SESSIONS_DIR / f"{sess['id']}.json").write_text(
-        json.dumps(sess, ensure_ascii=False, indent=2)
-    )
+def save_session(session: dict) -> None:
+    """Save a session to session state"""
+    sid = session["id"]
+    st.session_state.all_sessions[sid] = session
 
 
 def create_session(first_msg: str | None = None) -> dict:
+    """Create a brand-new empty session and return it."""
     sid   = str(uuid.uuid4())
     now   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     label = (first_msg[:30] + "…") if first_msg and len(first_msg) > 30 else (first_msg or "New session")
-
-    sess = {
-        "id": sid,
-        "name": label,
-        "created": now,
-        "model": DEFAULT_MODEL,
-        "messages": [],                         # list[{"role": "...", "content": "..."}]
-        "context": {
-            x: {"text": "", "source": None} for x in ("pdf", "image", "txt", "docx")
+    session = {
+        "id"      : sid,
+        "name"    : label,
+        "created" : now,
+        "model"   : DEFAULT_MODEL,
+        "messages": [],                      # list[{"role": "...", "content": "..."}]
+        "context" : {
+            "pdf": {"text": "", "source": None},
+            "image": {"text": "", "source": None},
+            "txt": {"text": "", "source": None},
+            "docx": {"text": "", "source": None}
         },
     }
-    save_session(sess)
-    return sess
+    save_session(session)
+    return session
 
 
 def delete_session(sid: str) -> None:
-    st.session_state.sessions.pop(sid, None)
+    """Remove a session from session state"""
+    st.session_state.all_sessions.pop(sid, None)
+
+
+def export_sessions() -> str:
+    """Export all sessions as a downloadable JSON file"""
+    return json.dumps(st.session_state.all_sessions, ensure_ascii=False, indent=2)
+
+
+def import_sessions(json_data: str) -> None:
+    """Import sessions from JSON data"""
     try:
-        (SESSIONS_DIR / f"{sid}.json").unlink(missing_ok=True)
-    except Exception:
-        pass
+        sessions = json.loads(json_data)
+        for sid, session in sessions.items():
+            st.session_state.all_sessions[sid] = session
+        return True
+    except Exception as e:
+        st.error(f"Failed to import sessions: {e}")
+        return False
 
-# ─────────────────────── File helpers ───────────────────── #
 
+# ────────────────────────  FILE HELPERS  ─────────────────── #
+@st.cache_data
 def pdf_to_text(uploaded) -> str:
-    """Extract text from a PDF using PyPDF2 instead of PyMuPDF (fitz)."""
+    """Extract text from PDF with caching for performance"""
     try:
-        # Read the uploaded file into a BytesIO buffer so PyPDF2 can handle it
-        buf = BytesIO(uploaded.read())
-        uploaded.seek(0)  # reset pointer so user can re‑read later if needed
-
-        reader = PdfReader(buf)
-        text = "".join(page.extract_text() or "" for page in reader.pages)
-        return text
+        buf = uploaded.read()
+        doc = fitz.open(stream=buf, filetype="pdf")
+        txt = "".join(page.get_text() for page in doc)
+        return txt
     except Exception as e:
         st.error(f"PDF error: {e}")
         return ""
 
 
+@st.cache_data
 def image_to_text_easyocr(uploaded) -> str:
+    """OCR an image (PNG/JPG) to plain text using EasyOCR."""
+    if not EASYOCR_AVAILABLE:
+        st.error("Image OCR requires EasyOCR. Install with: pip install easyocr")
+        return ""
+        
     try:
         img_bytes = uploaded.read()
-        uploaded.seek(0)
-        result = easy_reader.readtext(img_bytes, detail=0)
-        return "\n".join(result)
+        reader = load_ocr_reader()
+        if reader:
+            result = reader.readtext(img_bytes, detail=0)
+            return "\n".join(result)
+        else:
+            st.error("OCR reader could not be initialized")
+            return ""
     except Exception as e:
         st.error(f"Image OCR error: {e}")
         return ""
 
 
+@st.cache_data
 def txt_file_to_text(uploaded) -> str:
     try:
         data = uploaded.read().decode("utf-8", errors="ignore")
-        uploaded.seek(0)
         return data
     except Exception as e:
         st.error(f"Text-file error: {e}")
         return ""
 
 
+@st.cache_data
 def docx_to_text(uploaded) -> str:
+    """Extract text from a DOCX file."""
     if not DOCX_AVAILABLE:
+        st.error("DOCX support is not available. Install python-docx with: pip install python-docx")
         return ""
+        
     try:
         document = docx.Document(uploaded)
-        uploaded.seek(0)
-        return "\n".join(p.text for p in document.paragraphs)
+        return "\n".join([paragraph.text for paragraph in document.paragraphs])
     except Exception as e:
         st.error(f"DOCX error: {e}")
         return ""
 
-# ──────────────────── Groq client ──────────────────── #
-client = Groq(api_key=GROQ_API_KEY)
+
+# ────────────────────────  GROQ CLIENT  ──────────────────── #
+@st.cache_resource
+def get_groq_client():
+    """Get cached Groq client instance"""
+    if not GROQ_API_KEY:
+        st.warning("No Groq API key found. Please set it in Streamlit secrets or as environment variable.")
+        return None
+    return Groq(api_key=GROQ_API_KEY)
 
 
-def chat_completion_stream(history: list[dict], ctx: dict, model_name: str):
+def chat_completion_stream(history: list[dict], context_dict: dict, model_name: str):
+    """Stream a completion from Groq and return the full text."""
+    client = get_groq_client()
+    if not client:
+        yield "⚠️ No Groq API key configured. Please set GROQ_API_KEY in Streamlit secrets."
+        return
+        
     system_prompt = (
-        "You are a helpful, accurate, friendly AI assistant.\n"
-        "Use the supplied *context* if it answers the question; "
-        "otherwise rely on your own knowledge. "
-        "If you truly don't know, say so."
+        "You are a helpful, accurate, and friendly AI assistant.\n"
+        "• Provide clear, well-structured answers: use concise paragraphs, logical headings, and bullet points where helpful.\n"
+        "• If the supplied *context* contains the answer, incorporate or cite it; otherwise answer from your own knowledge.\n"
+        "• If you genuinely do not know, state that openly."
     )
 
-    # last two full turns = 4 msgs
+    # Get last 4 conversation turns for history (increased from 2)
     conversation_history = history[-4:]
-
-    # build context string
-    context_parts = [
-        f"context from {typ}:\n{item['text']}" for typ, item in ctx.items() if item["text"]
-    ]
-
-    prompt = system_prompt
+    
+    # Build context string based on available sources
+    context_parts = []
+    
+    if context_dict["image"]["text"]:
+        context_parts.append(f"context from image:\n{context_dict['image']['text']}")
+    
+    if context_dict["pdf"]["text"]:
+        context_parts.append(f"context from the pdf:\n{context_dict['pdf']['text']}")
+    
+    if context_dict["docx"]["text"]:
+        context_parts.append(f"context from docx:\n{context_dict['docx']['text']}")
+    
+    if context_dict["txt"]["text"]:
+        context_parts.append(f"context from txt:\n{context_dict['txt']['text']}")
+    
+    # Build the full prompt according to the requested format
+    prompt = f"{system_prompt}\n"
+    
     if context_parts:
-        prompt += "\n\nHere is extra context:\n" + "\n".join(context_parts) + "\n"
+        prompt += "here is the context\n"
+        prompt += "\n".join(context_parts)
+        prompt += "\n\nuse the context if needed while answering\n"
+    
+    # Create the messages array for the API call
+    msgs = [{"role": "system", "content": prompt}]
+    msgs.extend(conversation_history)
 
-    msgs = [{"role": "system", "content": prompt}, *conversation_history]
+    try:
+        stream = client.chat.completions.create(
+            model       = model_name,
+            messages    = msgs,
+            temperature = 0.7,
+            max_tokens  = 4096,  # Reduced from 8192 for better performance
+            stream      = True,
+        )
 
-    stream = client.chat.completions.create(
-        model=model_name,
-        messages=msgs,
-        temperature=0.7,
-        max_tokens=2048,
-        stream=True,
-    )
-
-    answer = ""
-    for chunk in stream:
-        answer += chunk.choices[0].delta.content or ""
-        yield answer  # incremental
+        response = ""
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            response += (delta.content or "")
+            yield response                        # incremental text
+    except Exception as e:
+        yield f"⚠️ Error: {str(e)}"
 
 
-# ═══════════════════════ UI ═══════════════════════ #
-# One-time session-state initialisation
-if "sessions"           not in st.session_state: st.session_state.sessions           = load_sessions()
-if "current_session_id" not in st.session_state: st.session_state.current_session_id = None
+# ──────────────────────────  UI  ─────────────────────────── #
+st.set_page_config(page_title="Groq Chat", page_icon="💬", layout="centered")
 
-# ─────────────── Sidebar ─────────────── #
+# Initialize session state
+if "all_sessions"        not in st.session_state: st.session_state.all_sessions        = {}
+if "current_session_id"  not in st.session_state: st.session_state.current_session_id  = None
+
+# ───────────────── sidebar ───────────────── #
 with st.sidebar:
     st.header("Chat Sessions")
+
+    # Display warnings for missing dependencies
+    if not EASYOCR_AVAILABLE:
+        st.sidebar.warning("📷 Install easyocr to enable image OCR:\n```pip install easyocr```")
+    
+    if not DOCX_AVAILABLE:
+        st.sidebar.warning("📝 Install python-docx to enable DOCX support:\n```pip install python-docx```")
+
+    # New session
     if st.button("➕  New session"):
-        s = create_session()
-        st.session_state.sessions[s["id"]] = s
-        st.session_state.current_session_id = s["id"]
+        session = create_session()
+        sid = session["id"]
+        st.session_state.all_sessions[sid] = session
+        st.session_state.current_session_id = sid
         st.rerun()
-
-    # Model selector (when a session is active)
+        
+    # Export/Import sessions
+    with st.expander("Import/Export Sessions"):
+        # Export
+        if st.session_state.all_sessions:
+            export_data = export_sessions()
+            st.download_button(
+                "Export All Sessions", 
+                export_data,
+                "groq_chat_sessions.json",
+                "application/json",
+                key="export_button"
+            )
+        
+        # Import
+        uploaded_file = st.file_uploader("Import Sessions", type=["json"], key="import_sessions")
+        if uploaded_file is not None:
+            import_data = uploaded_file.read().decode("utf-8")
+            if import_sessions(import_data):
+                st.success("Sessions imported successfully!")
+                st.rerun()
+        
+    # Model selection (only available if there's an active session)
     if st.session_state.current_session_id:
-        sess = st.session_state.sessions[st.session_state.current_session_id]
+        sess = st.session_state.all_sessions[st.session_state.current_session_id]
         current_model = sess.get("model", DEFAULT_MODEL)
-        new_model = st.selectbox(
-            "Model",
-            AVAILABLE_MODELS,
-            index=AVAILABLE_MODELS.index(current_model),
+        
+        selected_model = st.selectbox(
+            "Select model",
+            options=AVAILABLE_MODELS,
+            index=AVAILABLE_MODELS.index(current_model) if current_model in AVAILABLE_MODELS else 0,
+            key="model_selector"
         )
-        if new_model != current_model:
-            sess["model"] = new_model
+        
+        # Update session if model changed
+        if selected_model != current_model:
+            sess["model"] = selected_model
             save_session(sess)
-            st.experimental_rerun()
+            st.success(f"Model changed to {selected_model}")
 
-    # Upload files
-    exts = ["pdf", "png", "jpg", "jpeg", "txt"] + (["docx"] if DOCX_AVAILABLE else [])
-    upl = st.file_uploader("Upload context file", type=exts)
-
+    # File uploader (needs an active session)
+    file_types = ["pdf", "png", "jpg", "jpeg", "txt"]
+    if DOCX_AVAILABLE:
+        file_types.append("docx")
+        
+    upl = st.file_uploader(f"Upload PDF / image / txt{' / docx' if DOCX_AVAILABLE else ''}",
+                           type=file_types)
     if upl and st.session_state.current_session_id:
-        sess = st.session_state.sessions[st.session_state.current_session_id]
+        sess = st.session_state.all_sessions[st.session_state.current_session_id]
 
-        if upl.type.endswith("pdf") or upl.type == "application/pdf":
-            txt, src = pdf_to_text(upl), f"PDF: {upl.name}"
-            key = "pdf"
+        if upl.type.endswith("pdf"):
+            text = pdf_to_text(upl)
+            src = f"PDF: {upl.name}"
+            if text:
+                sess["context"]["pdf"] = {"text": text, "source": src}
+                save_session(sess)
+                st.success(f"Added context from {src}")
+                
         elif upl.type.startswith("image/"):
-            txt, src = image_to_text_easyocr(upl), f"Image: {upl.name}"
-            key = "image"
+            text = image_to_text_easyocr(upl)
+            src = f"Image: {upl.name}"
+            if text:
+                sess["context"]["image"] = {"text": text, "source": src}
+                save_session(sess)
+                st.success(f"Added context from {src}")
+                
         elif upl.name.endswith(".docx"):
-            txt, src = docx_to_text(upl), f"DOCX: {upl.name}"
-            key = "docx"
-        else:
-            txt, src = txt_file_to_text(upl), f"Text: {upl.name}"
-            key = "txt"
+            text = docx_to_text(upl)
+            src = f"DOCX: {upl.name}"
+            if text:
+                sess["context"]["docx"] = {"text": text, "source": src}
+                save_session(sess)
+                st.success(f"Added context from {src}")
+                
+        else:  # plain text
+            text = txt_file_to_text(upl)
+            src = f"Text: {upl.name}"
+            if text:
+                sess["context"]["txt"] = {"text": text, "source": src}
+                save_session(sess)
+                st.success(f"Added context from {src}")
 
-        if txt:
-            sess["context"][key] = {"text": txt, "source": src}
-            save_session(sess)
-            st.success(f"Added context from {src}")
-
-    # Existing sessions list
+    # List existing sessions
     st.markdown("### Existing")
-    for sid, s in sorted(
-        st.session_state.sessions.items(),
-        key=lambda t: t[1]["created"],
-        reverse=True,
-    ):
+    for sid, sess in sorted(
+        st.session_state.all_sessions.items(),
+        key=lambda t: t[1].get("created") or t[1].get("created_at", ""),
+        reverse=True):
+
         cols = st.columns([4, 1])
-        if cols[0].button(s["name"], key=f"sel_{sid}"):
+        if cols[0].button(sess["name"], key=f"sel_{sid}"):
             st.session_state.current_session_id = sid
             st.rerun()
         if cols[1].button("🗑️", key=f"del_{sid}"):
             delete_session(sid)
+            if st.session_state.current_session_id == sid:
+                st.session_state.current_session_id = None
             st.rerun()
 
-    # Missing-key notice
     if not GROQ_API_KEY:
-        st.warning("Add **GROQ_API_KEY** in the app’s secrets to chat with Groq.")
+        st.warning("Set the **GROQ_API_KEY** in Streamlit secrets to talk to Groq.")
+        st.info("In Streamlit Cloud, add this to your secrets.toml file.")
 
-    if not DOCX_AVAILABLE:
-        st.info("📝 DOCX support not installed (`pip install python-docx`).")
-
-# ─────────────── Main pane ─────────────── #
-st.title("💬 AI Assistant")
+# ───────────────── main pane ───────────────── #
+st.title("💬 AI Assistant -- Prof. Saud Afzal")
 
 if not st.session_state.current_session_id:
     st.info("Create a session to start chatting.")
     st.stop()
 
-sess = st.session_state.sessions[st.session_state.current_session_id]
+sess = st.session_state.all_sessions[st.session_state.current_session_id]
 st.subheader(f"Session: {sess['name']}")
-st.caption(f"🤖 Model: {sess.get('model', DEFAULT_MODEL)}")
 
-# show context sources
-sources = [
-    ctx["source"] for ctx in sess["context"].values() if ctx["source"]
-]
-if sources:
-    st.caption("🔗 Context from: " + ", ".join(sources))
+# Display model info
+current_model = sess.get("model", DEFAULT_MODEL)
+st.caption(f"🤖 Model: {current_model}")
+
+# Display context sources if available
+context_sources = []
+for ctx_type, ctx_data in sess["context"].items():
+    if ctx_data["source"]:
+        context_sources.append(ctx_data["source"])
+
+if context_sources:
+    st.caption(f"🔗 Context from: {', '.join(context_sources)}")
 
 # clear button
 if st.button("Clear chat & context"):
     sess["messages"].clear()
-    for item in sess["context"].values():
-        item.update(text="", source=None)
+    sess["context"] = {
+        "pdf": {"text": "", "source": None},
+        "image": {"text": "", "source": None},
+        "txt": {"text": "", "source": None},
+        "docx": {"text": "", "source": None}
+    }
     save_session(sess)
-    st.experimental_rerun()
+    st.rerun()
 
-# render chat history
-for m in sess["messages"]:
-    if m["role"] != "system":
-        with st.chat_message(m["role"]):
-            st.write(m["content"])
+# show history
+for msg in sess["messages"]:
+    if msg["role"] != "system":              # hide system notes
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
 
 # chat input
 prompt = st.chat_input("Ask me something…")
 if prompt:
+    # rename session on first user msg
     if not sess["messages"]:
         sess["name"] = (prompt[:30] + "…") if len(prompt) > 30 else prompt
 
@@ -324,21 +421,21 @@ if prompt:
     with st.chat_message("user"):
         st.write(prompt)
 
+    # streaming answer
     with st.chat_message("assistant"):
         container = st.empty()
         answer = ""
         try:
-            for partial in chat_completion_stream(
-                sess["messages"],
-                sess["context"],
-                sess.get("model", DEFAULT_MODEL),
-            ):
+            for partial in chat_completion_stream(sess["messages"], sess["context"], sess.get("model", DEFAULT_MODEL)):
                 answer = partial
                 container.markdown(answer + "▌")
-            container.markdown(answer)
+            container.markdown(answer)       # final
         except Exception as e:
-            answer = f"⚠️ {e}"
+            answer = f"⚠️  {e}"
             container.error(answer)
+            if "is not available" in str(e):
+                container.warning("This may be because the selected model is not available in your Groq API subscription.")
+                container.info("Try selecting a different model in the sidebar.")
 
     sess["messages"].append({"role": "assistant", "content": answer})
     save_session(sess)
