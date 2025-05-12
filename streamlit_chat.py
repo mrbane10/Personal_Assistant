@@ -51,9 +51,9 @@ AVAILABLE_MODELS = [
     "meta-llama/llama-4-maverick-17b-128e-instruct"
 ]
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
-DEFAULT_MAX_TOKENS = 8192
+DEFAULT_MAX_TOKENS = 4096
 MIN_TOKENS = 256
-MAX_TOKENS = 36000
+MAX_TOKENS = 8192
 
 # ────────────────────────  OCR READER  ─────────────────────── #
 @st.cache_resource
