@@ -8,7 +8,7 @@ import time
 import uuid
 from datetime import datetime
 
-import fitz                                # PyMuPDF
+import pymupdf                               # PyMuPDF
 import numpy as np
 import streamlit as st
 from PIL import Image
@@ -115,7 +115,7 @@ def pdf_to_text(uploaded) -> str:
     """Extract text from PDF with caching for performance"""
     try:
         buf = uploaded.read()
-        doc = fitz.open(stream=buf, filetype="pdf")
+        doc = pymupdf.open(stream=buf, filetype="pdf")
         txt = "".join(page.get_text() for page in doc)
         return txt
     except Exception as e:
