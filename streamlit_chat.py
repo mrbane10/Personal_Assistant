@@ -438,7 +438,7 @@ if st.button("Clear chat & context"):
 for msg in sess["messages"]:
     if msg["role"] != "system":              # hide system notes
         with st.chat_message(msg["role"]):
-            st.write(msg["content"])
+            st.markdown(msg["content"])
 
 # chat input
 prompt = st.chat_input("Ask me something…")
@@ -449,7 +449,7 @@ if prompt:
 
     sess["messages"].append({"role": "user", "content": prompt})
     with st.chat_message("user"):
-        st.write(prompt)
+        st.markdown(prompt)
 
     # streaming answer
     with st.chat_message("assistant"):
