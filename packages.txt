@@ -1,0 +1,4 @@
+
+# Required system packages for Tesseract OCR
+tesseract-ocr
+libtesseract-dev
