@@ -1,11 +1,10 @@
-# groq_streamlit_cloud_fixed.py
+# groq_streamlit_cloud.py
 """
 Streamlit chat application that:
 • stores multi-chat "sessions" using Streamlit's native session state
 • accepts PDFs / images / text files / docx and makes their text available as context
 • streams answers from Groq's chat-completion API
 • optimized for Streamlit Cloud deployment
-• Fixed EasyOCR issues with more robust error handling
 """
 
 import base64
@@ -24,17 +23,11 @@ from PIL import Image
 from groq import Groq                      # pip install groq
 
 # Try to import optional dependencies with graceful fallbacks
-# Use pytesseract instead of EasyOCR for OCR functionality
-TESSERACT_AVAILABLE = False
 try:
-    import pytesseract
-    from PIL import Image  # We're already importing Pillow elsewhere
-    # Test if tesseract is available
-    pytesseract.get_tesseract_version()
-    TESSERACT_AVAILABLE = True
-except Exception as e:
-    # Will show in sidebar later
-    TESSERACT_AVAILABLE = False
+    import easyocr                             # OCR
+    EASYOCR_AVAILABLE = True
+except ImportError:
+    EASYOCR_AVAILABLE = False
     
 try:
     import docx                               # python-docx for DOCX files
@@ -63,26 +56,12 @@ MIN_TOKENS = 256
 MAX_TOKENS = 36000
 
 # ────────────────────────  OCR READER  ─────────────────────── #
-# Using pytesseract instead of EasyOCR
-@st.cache_data
-def image_to_text_tesseract(uploaded) -> str:
-    """Extract text from an image (PNG/JPG) using pytesseract."""
-    if not TESSERACT_AVAILABLE:
-        st.error("Image OCR requires pytesseract. Install with: pip install pytesseract")
-        st.info("You also need to install Tesseract OCR on your system.")
-        return ""
-        
-    try:
-        img_bytes = uploaded.read()
-        # Open image with PIL
-        image = Image.open(io.BytesIO(img_bytes))
-        
-        # Use pytesseract to extract text
-        text = pytesseract.image_to_string(image, lang='eng')
-        return text
-    except Exception as e:
-        st.error(f"Image OCR error: {e}")
-        return ""
+@st.cache_resource
+def load_ocr_reader():
+    """Load EasyOCR reader with caching to improve performance"""
+    if EASYOCR_AVAILABLE:
+        return easyocr.Reader(['en'], gpu=False)
+    return None
 
 
 # ──────────────────  SESSION MANAGEMENT  ──────────────── #
@@ -161,20 +140,14 @@ def pdf_to_text(uploaded) -> str:
 def image_to_text_easyocr(uploaded) -> str:
     """OCR an image (PNG/JPG) to plain text using EasyOCR."""
     if not EASYOCR_AVAILABLE:
-        st.error("Image OCR requires EasyOCR. Install with: pip install easyocr torch")
+        st.error("Image OCR requires EasyOCR. Install with: pip install easyocr")
         return ""
         
     try:
         img_bytes = uploaded.read()
-        # Convert bytes to PIL Image first
-        image = Image.open(io.BytesIO(img_bytes))
-        # Convert PIL Image to numpy array
-        img_array = np.array(image)
-        
         reader = load_ocr_reader()
         if reader:
-            # Use numpy array instead of bytes for more reliable processing
-            result = reader.readtext(img_array, detail=0)
+            result = reader.readtext(img_bytes, detail=0)
             return "\n".join(result)
         else:
             st.error("OCR reader could not be initialized")
@@ -294,10 +267,8 @@ with st.sidebar:
     st.header("Chat Sessions")
 
     # Display warnings for missing dependencies
-    if not TESSERACT_AVAILABLE:
-        st.sidebar.warning("📷 Image OCR is not available. To enable it:")
-        st.sidebar.info("1. Install Tesseract OCR on your system:\n- Windows: https://github.com/UB-Mannheim/tesseract/wiki\n- Mac: brew install tesseract\n- Linux: apt-get install tesseract-ocr")
-        st.sidebar.info("2. Install Python package:\n```pip install pytesseract```")
+    if not EASYOCR_AVAILABLE:
+        st.sidebar.warning("📷 Install easyocr to enable image OCR:\n```pip install easyocr```")
     
     if not DOCX_AVAILABLE:
         st.sidebar.warning("📝 Install python-docx to enable DOCX support:\n```pip install python-docx```")
@@ -384,16 +355,12 @@ with st.sidebar:
                 st.success(f"Added context from {src}")
                 
         elif upl.type.startswith("image/"):
-            # Check if Tesseract OCR is available before attempting to process
-            if TESSERACT_AVAILABLE:
-                text = image_to_text_tesseract(upl)
-                src = f"Image: {upl.name}"
-                if text:
-                    sess["context"]["image"] = {"text": text, "source": src}
-                    save_session(sess)
-                    st.success(f"Added context from {src}")
-            else:
-                st.error("Image OCR is not available. Please install Tesseract OCR and pytesseract.")
+            text = image_to_text_easyocr(upl)
+            src = f"Image: {upl.name}"
+            if text:
+                sess["context"]["image"] = {"text": text, "source": src}
+                save_session(sess)
+                st.success(f"Added context from {src}")
                 
         elif upl.name.endswith(".docx"):
             text = docx_to_text(upl)
