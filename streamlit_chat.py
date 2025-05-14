@@ -21,6 +21,9 @@ import streamlit as st
 from PIL import Image
 from groq import Groq                      # pip install groq
 
+#default to wide mode
+st.set_page_config(layout="wide")
+
 # Try to import optional dependencies with graceful fallbacks
 try:
     import pytesseract
@@ -74,8 +77,7 @@ def image_to_text_tesseract(uploaded) -> str:
         st.error(f"Image OCR error: {e}")
         return ""
 
-#default to wide mode
-st.set_page_config(layout="wide")
+
 
 # ──────────────────  SESSION MANAGEMENT  ──────────────── #
 def load_sessions() -> dict[str, dict]:
