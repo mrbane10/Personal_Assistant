@@ -61,7 +61,8 @@ def load_ocr_reader():
     """Load EasyOCR reader with caching to improve performance"""
     if EASYOCR_AVAILABLE:
         return easyocr.Reader(['en'], gpu=False)
-    return None
+    else: 
+        return None
 
 
 # ──────────────────  SESSION MANAGEMENT  ──────────────── #
