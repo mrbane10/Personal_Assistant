@@ -1,10 +1,9 @@
-# groq_streamlit_cloud.py
-"""
-Streamlit chat application that:
+"""Streamlit chat application that:
 • stores multi-chat "sessions" using Streamlit's native session state
 • accepts PDFs / images / text files / docx and makes their text available as context
 • streams answers from Groq's chat-completion API
 • optimized for Streamlit Cloud deployment
+• uses lightweight OCR solution for images
 """
 
 import base64
@@ -149,27 +148,6 @@ def pdf_to_text(uploaded) -> str:
 
 
 @st.cache_data
-def image_to_text_easyocr(uploaded) -> str:
-    """OCR an image (PNG/JPG) to plain text using EasyOCR."""
-    if not EASYOCR_AVAILABLE:
-        st.error("Image OCR requires EasyOCR. Install with: pip install easyocr")
-        return ""
-        
-    try:
-        img_bytes = uploaded.read()
-        reader = load_ocr_reader()
-        if reader:
-            result = reader.readtext(img_bytes, detail=0)
-            return "\n".join(result)
-        else:
-            st.error("OCR reader could not be initialized")
-            return ""
-    except Exception as e:
-        st.error(f"Image OCR error: {e}")
-        return ""
-
-
-@st.cache_data
 def txt_file_to_text(uploaded) -> str:
     try:
         data = uploaded.read().decode("utf-8", errors="ignore")
@@ -279,8 +257,8 @@ with st.sidebar:
     st.header("Chat Sessions")
 
     # Display warnings for missing dependencies
-    if not EASYOCR_AVAILABLE:
-        st.sidebar.warning("📷 Install easyocr to enable image OCR:\n```pip install easyocr```")
+    if not OCR_AVAILABLE:
+        st.sidebar.warning("📷 Install pytesseract to enable image OCR:\n```pip install pytesseract pillow```")
     
     if not DOCX_AVAILABLE:
         st.sidebar.warning("📝 Install python-docx to enable DOCX support:\n```pip install python-docx```")
@@ -367,12 +345,15 @@ with st.sidebar:
                 st.success(f"Added context from {src}")
                 
         elif upl.type.startswith("image/"):
-            text = image_to_text_easyocr(upl)
-            src = f"Image: {upl.name}"
-            if text:
-                sess["context"]["image"] = {"text": text, "source": src}
-                save_session(sess)
-                st.success(f"Added context from {src}")
+            if OCR_AVAILABLE:
+                text = image_to_text_tesseract(upl)
+                src = f"Image: {upl.name}"
+                if text:
+                    sess["context"]["image"] = {"text": text, "source": src}
+                    save_session(sess)
+                    st.success(f"Added context from {src}")
+            else:
+                st.error("Image OCR requires pytesseract. Install with: pip install pytesseract pillow")
                 
         elif upl.name.endswith(".docx"):
             text = docx_to_text(upl)
