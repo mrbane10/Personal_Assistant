@@ -24,10 +24,11 @@ from groq import Groq                      # pip install groq
 
 # Try to import optional dependencies with graceful fallbacks
 try:
-    import easyocr                             # OCR
-    EASYOCR_AVAILABLE = True
+    import pytesseract
+    from PIL import Image
+    OCR_AVAILABLE = True
 except ImportError:
-    EASYOCR_AVAILABLE = False
+    OCR_AVAILABLE = False
     
 try:
     import docx                               # python-docx for DOCX files
@@ -56,13 +57,23 @@ MIN_TOKENS = 256
 MAX_TOKENS = 36000
 
 # ────────────────────────  OCR READER  ─────────────────────── #
-@st.cache_resource
-def load_ocr_reader():
-    """Load EasyOCR reader with caching to improve performance"""
-    if EASYOCR_AVAILABLE:
-        return easyocr.Reader(['en'], gpu=False)
-    else: 
-        return None
+@st.cache_data
+def image_to_text_tesseract(uploaded) -> str:
+    """OCR an image (PNG/JPG) to plain text using Tesseract via pytesseract"""
+    if not OCR_AVAILABLE:
+        st.error("Image OCR requires pytesseract. Install with: pip install pytesseract pillow")
+        return ""
+        
+    try:
+        # Open the image with PIL
+        image = Image.open(uploaded)
+        
+        # Process with pytesseract
+        text = pytesseract.image_to_string(image)
+        return text
+    except Exception as e:
+        st.error(f"Image OCR error: {e}")
+        return ""
 
 
 # ──────────────────  SESSION MANAGEMENT  ──────────────── #
