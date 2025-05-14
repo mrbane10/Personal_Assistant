@@ -21,8 +21,6 @@ import streamlit as st
 from PIL import Image
 from groq import Groq                      # pip install groq
 
-#default to wide mode
-st.set_page_config(layout="wide")
 
 # Try to import optional dependencies with graceful fallbacks
 try:
@@ -250,7 +248,7 @@ def chat_completion_stream(history: list[dict], context_dict: dict, model_name: 
 
 
 # ──────────────────────────  UI  ─────────────────────────── #
-st.set_page_config(page_title="AI Assistant", page_icon="💬", layout="centered")
+st.set_page_config(page_title="AI Assistant", page_icon="💬", layout="wide")
 
 # Initialize session state
 if "all_sessions"        not in st.session_state: st.session_state.all_sessions        = {}
