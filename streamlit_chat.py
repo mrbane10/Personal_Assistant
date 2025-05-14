@@ -74,6 +74,8 @@ def image_to_text_tesseract(uploaded) -> str:
         st.error(f"Image OCR error: {e}")
         return ""
 
+#default to wide mode
+st.set_page_config(layout="wide")
 
 # ──────────────────  SESSION MANAGEMENT  ──────────────── #
 def load_sessions() -> dict[str, dict]:
