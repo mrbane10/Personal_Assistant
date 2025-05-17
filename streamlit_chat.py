@@ -193,9 +193,9 @@ def chat_completion_stream(history: list[dict], context_dict: dict, model_name: 
         
     system_prompt = (
         "You are a helpful, accurate, and friendly AI assistant.\n"
-        "• Provide clear, well-structured answers: use concise paragraphs, logical headings, and bullet points where helpful.\n"
+        "• Provide clear, well-structured answers\n"
         "• If the supplied *context* contains the answer, incorporate or cite it; otherwise answer from your own knowledge.\n"
-        "• While answering quries involving mathematical symbols or equations, ensure proper formatting of equations in Latex.\n"
+        "• While answering quries involving mathematical symbols or equations, please and please proper formatting of equations in Latex.\n"
         "• If you genuinely do not know, state that openly."
     )
 
