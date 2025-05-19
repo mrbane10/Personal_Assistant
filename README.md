@@ -34,6 +34,7 @@ Run the Streamlit app locally:
 streamlit run app.py
 ```
 ## Usage
+
 - Upload documents (PDF, images, text files, DOCX) to provide context for your queries.
 
 - Select from multiple available Groq language models.
@@ -44,32 +45,32 @@ streamlit run app.py
 
 - Clear chat and context anytime.
 
-Architecture
-app.py: Main Streamlit app and UI logic
+## Architecture
 
-Document loaders and text extractors (PDF, image OCR, DOCX, TXT)
+- app.py: Main Streamlit app and UI logic
 
-Session management with persistent multi-chat sessions
+- Document loaders and text extractors (PDF, image OCR, DOCX, TXT)
 
-Groq API client integration with streaming responses
+- Session management with persistent multi-chat sessions
 
-Model selection and token length controls
+- Groq API client integration with streaming responses
 
-Limitations
-OCR requires pytesseract and pillow installed
+- Model selection and token length controls
 
-DOCX support requires python-docx
+## Limitations
 
-Groq API key needed for chat completions
+- OCR requires pytesseract and pillow installed
 
-Intended for moderate document sizes and typical conversational workloads
+- DOCX support requires python-docx
 
-Deployment
-Fully compatible with Streamlit Cloud
+- Groq API key needed for chat completions
 
-Ensure secrets are configured properly for API keys and passwords
+- Intended for moderate document sizes and typical conversational workloads
 
-Cache directories and environment variables need write permissions
+## Deployment
 
+- Fully compatible with Streamlit Cloud
 
+- Ensure secrets are configured properly for API keys and passwords
 
+- Cache directories and environment variables need write permissions
