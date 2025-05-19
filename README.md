@@ -30,7 +30,46 @@ This is an interactive AI chat assistant built with Streamlit, supporting multip
 
 Run the Streamlit app locally:
 
-  ```bash
-    streamlit run app.py
- ## Usage
+```bash
+streamlit run app.py
+```
+## Usage
+- Upload documents (PDF, images, text files, DOCX) to provide context for your queries.
+
+- Select from multiple available Groq language models.
+
+- Start new chat sessions or switch between existing ones.
+
+- Export and import chat sessions for persistence.
+
+- Clear chat and context anytime.
+
+Architecture
+app.py: Main Streamlit app and UI logic
+
+Document loaders and text extractors (PDF, image OCR, DOCX, TXT)
+
+Session management with persistent multi-chat sessions
+
+Groq API client integration with streaming responses
+
+Model selection and token length controls
+
+Limitations
+OCR requires pytesseract and pillow installed
+
+DOCX support requires python-docx
+
+Groq API key needed for chat completions
+
+Intended for moderate document sizes and typical conversational workloads
+
+Deployment
+Fully compatible with Streamlit Cloud
+
+Ensure secrets are configured properly for API keys and passwords
+
+Cache directories and environment variables need write permissions
+
+
 
